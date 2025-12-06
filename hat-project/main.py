@@ -112,7 +112,21 @@ def get_landmark_pos(landmarks, landmark_type):
 def get_distance(p1, p2):
     if p1 is None or p2 is None: return 0
     return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
-
+    
+def score_to_star(score: float) -> dict:
+    """
+    コサイン類似度 (-1.0 ~ 1.0) を 1~5 の評価に変換する
+    """
+    # ユーザー指定の厳格な閾値
+    if score >= 0.90: star = 5
+    elif score >= 0.85: star = 4
+    elif score >= 0.70: star = 3
+    elif score >= 0.50: star = 2
+    else: star = 1
+    
+    star_str = "★" * star + "☆" * (5 - star)
+    return {"rating": star, "display": star_str}
+    
 def diagnose_face_type(v_shape: np.ndarray) -> np.ndarray:
     v1, v2, v3, v4, v5, v6, v7, v8, v9, v10 = v_shape
     score_child_adult = 0.0
@@ -254,7 +268,15 @@ async def get_recommendations(user_id: int, db: Session = Depends(get_db)):
         s_p = cosine_similarity(v_p_pref, v_pair) if has_p else 0.0
         s_avg = cosine_similarity(v_avg, v_pair) if all_prefs else 0.0
         s_final = (1.0 - BETA) * s_p + BETA * s_avg if has_p else s_avg
-        results.append({"hat_id": hat.id, "hat_name": hat.name, "S_final": s_final})
+        star_info = score_to_star(s_final)
+        
+        results.append({
+            "hat_id": hat.id, 
+            "hat_name": hat.name, 
+            "S_final": s_final,
+            "star_rating": star_info["rating"],   # 追加
+            "star_display": star_info["display"]  # 追加
+        })
     return {"recommendations": sorted(results, key=lambda x: x["S_final"], reverse=True)}
 
 # ★★★ 新規機能 v9: フィードバック送信と学習 ★★★
@@ -309,4 +331,5 @@ async def submit_feedback(
 if __name__ == "__main__":
     print("--- 【v9 学習機能付き】帽子推薦システムAPI を起動します ---")
     print("APIドキュメント: http://127.0.0.1:8081/docs")
+
     uvicorn.run(app, host="127.0.0.1", port=8081)
