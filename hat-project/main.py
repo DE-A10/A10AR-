@@ -278,7 +278,63 @@ async def get_recommendations(user_id: int, db: Session = Depends(get_db)):
             "star_display": star_info["display"]  # 追加
         })
     return {"recommendations": sorted(results, key=lambda x: x["S_final"], reverse=True)}
+# ==========================================
+# ★★★ 新規追加: 特定の帽子1つだけのスコアを計算 ★★★
+# ==========================================
+@app.get("/recommendations/{user_id}/hat/{hat_id}", summary="【単体】特定の帽子の似合い度を取得")
+async def get_single_hat_score(user_id: int, hat_id: int, db: Session = Depends(get_db)):
+    """
+    指定されたユーザーと、指定された帽子の「似合い度」を個別に計算して返します。
+    """
+    # 1. ユーザーと帽子を探す
+    user = db.query(User).filter(User.id == user_id).first()
+    hat = db.query(Hat).filter(Hat.id == hat_id).first()
+    
+    if not user or not hat:
+        raise HTTPException(status_code=404, detail="ユーザーまたは帽子が見つかりません")
 
+    # 2. ベクトルと基準の準備
+    v_user = get_user_vector(user)
+    
+    # (A) みんなの平均好みベクトル
+    all_prefs = db.query(UserPreference).all()
+    if not all_prefs:
+        v_average_preference = np.zeros(DIM_PREFERENCE)
+        N = 0
+    else:
+        all_pref_vectors = [json_to_vec(p.vector_preference) for p in all_prefs]
+        v_average_preference = np.mean(all_pref_vectors, axis=0)
+        N = len(all_pref_vectors)
+
+    # (B) その人の個人的な好みベクトル
+    personal_pref = db.query(UserPreference).filter_by(user_id=user_id).order_by(UserPreference.id.desc()).first()
+    if personal_pref:
+        v_preference_personal = json_to_vec(personal_pref.vector_preference)
+        has_personal_score = True
+    else:
+        v_preference_personal = np.zeros(DIM_PREFERENCE)
+        has_personal_score = False
+
+    # 3. スコア計算 (1個だけ)
+    v_hat = get_hat_vector(hat)
+    v_pair = np.concatenate([v_user, v_hat])
+    
+    s_p = cosine_similarity(v_preference_personal, v_pair) if has_personal_score else 0.0
+    s_avg = cosine_similarity(v_average_preference, v_pair) if N > 0 else 0.0
+    
+    # 統合スコア (0.0 ~ 1.0)
+    s_final = (1.0 - BETA) * s_p + BETA * s_avg if has_personal_score else s_avg
+    
+    # ★5段階評価に変換
+    star_info = score_to_star(s_final)
+
+    return {
+        "hat_id": hat.id,
+        "hat_name": hat.name,
+        "S_final": s_final,
+        "star_rating": star_info["rating"],   # 1~5
+        "star_display": star_info["display"]  # ★★★☆☆
+    }
 # ★★★ 新規機能 v9: フィードバック送信と学習 ★★★
 @app.post("/feedback/", summary="【利用者用】フィードバック送信と学習")
 async def submit_feedback(
@@ -333,3 +389,4 @@ if __name__ == "__main__":
     print("APIドキュメント: http://127.0.0.1:8081/docs")
 
     uvicorn.run(app, host="127.0.0.1", port=8081)
+
